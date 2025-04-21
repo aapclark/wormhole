@@ -104,7 +104,6 @@ type (
 	PerChainConfig struct {
 		TimestampCacheSupported bool
 		NumWorkers              int
-		VmType                  string
 	}
 )
 
@@ -264,7 +263,7 @@ func handleQueryRequestsImpl(
 				invalidQueryRequestReceived.WithLabelValues("failed_to_get_rate_limit_policy").Inc()
 			}
 
-			if len(policy.Limits.Networks) == 0 {
+			if len(policy.Limits.Types) == 0 {
 				qLogger.Debug("requestor has no limits / invalid requestor", zap.String("requestID", requestID))
 				invalidQueryRequestReceived.WithLabelValues("invalid_requestor").Inc()
 				continue
@@ -288,9 +287,9 @@ func handleQueryRequestsImpl(
 			// the signer signed this! so they should be punished for sending bad requests.
 			// if they send a chain that is not supported, we will just drop it for now, but mayvbe we should rate limit them for the valid ones they sent. are we that evil ?
 			action := &queryratelimit.Action{
-				Key:      signerAddress,
-				Time:     time.Now(),
-				Networks: make(map[string]int),
+				Key:   signerAddress,
+				Time:  time.Now(),
+				Types: make(map[uint8]int),
 			}
 			if ok := func() bool {
 				for _, pcq := range queryRequest.PerChainQueries {
@@ -301,7 +300,7 @@ func handleQueryRequestsImpl(
 						invalidQueryRequestReceived.WithLabelValues("chain_does_not_support_ccq").Inc()
 						return false
 					}
-					action.Networks[config.VmType] += 1
+					action.Types[uint8(pcq.Query.Type())] += 1
 				}
 				return true
 			}(); !ok {
@@ -315,7 +314,7 @@ func handleQueryRequestsImpl(
 				continue
 			}
 			if !limitResult.Allowed {
-				qLogger.Warn("rate limit exceeded", zap.String("requestID", requestID), zap.Any("networks", limitResult.ExceededNetworks))
+				qLogger.Warn("rate limit exceeded", zap.String("requestID", requestID), zap.Any("types", limitResult.ExceededTypes))
 				invalidQueryRequestReceived.WithLabelValues("rate_limit_exceeded").Inc()
 				continue
 			}

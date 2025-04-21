@@ -52,15 +52,10 @@ func FetchCurrentGuardianSet(ctx context.Context, rpcUrl, coreAddr string) (*com
 	}, nil
 }
 
-// validateRequest verifies that this API key is allowed to do all of the calls in this request. In the case of an error, it returns the HTTP status.
-func validateRequest(logger *zap.Logger, env common.Environment, perms *Permissions, signerKey *ecdsa.PrivateKey, apiKey string, qr *gossipv1.SignedQueryRequest) (int, *query.QueryRequest, error) {
-	permsForUser, exists := perms.GetUserEntry(apiKey)
-	if !exists {
-		logger.Debug("invalid api key", zap.String("apiKey", apiKey))
-		invalidQueryRequestReceived.WithLabelValues("invalid_api_key").Inc()
-		return http.StatusForbidden, nil, errors.New("invalid api key")
-	}
-
+// validateRequest verifies that the user is allowed to make all of the calls in this request.
+// Note: This is only used in legacy API key mode. API key validation is done by the caller.
+// In the case of an error, it returns the HTTP status.
+func validateRequest(logger *zap.Logger, env common.Environment, permsForUser *permissionEntry, signerKey *ecdsa.PrivateKey, qr *gossipv1.SignedQueryRequest) (int, *query.QueryRequest, error) {
 	// TODO: Should we verify the signatures?
 
 	if len(qr.Signature) == 0 {

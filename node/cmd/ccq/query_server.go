@@ -1,5 +1,5 @@
 // Note: To generate a signer key file do: guardiand keygen --block-type "CCQ SERVER SIGNING KEY" /path/to/key/file
-// You will need to add this key to ccqAllowedRequesters in the guardian configs.
+// This key must have associated staking to be authorized for CCQ queries.
 
 package ccq
 
@@ -15,10 +15,14 @@ import (
 
 	"github.com/certusone/wormhole/node/pkg/common"
 	"github.com/certusone/wormhole/node/pkg/p2p"
+	"github.com/certusone/wormhole/node/pkg/query/queryratelimit"
+	"github.com/certusone/wormhole/node/pkg/query/querystaking"
 	"github.com/certusone/wormhole/node/pkg/telemetry"
 	promremotew "github.com/certusone/wormhole/node/pkg/telemetry/prom_remote_write"
 	"github.com/certusone/wormhole/node/pkg/version"
+	ethCommon "github.com/ethereum/go-ethereum/common"
 	ethCrypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 	ipfslog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/spf13/cobra"
@@ -49,6 +53,9 @@ var (
 	monitorPeers           *bool
 	gossipAdvertiseAddress *string
 	verifyPermissions      *bool
+	ccqFactoryAddress      *string
+	ipfsGateway            *string
+	policyCacheDuration    *uint
 )
 
 const DEV_NETWORK_ID = "/wormhole/dev"
@@ -73,6 +80,9 @@ func init() {
 	monitorPeers = QueryServerCmd.Flags().Bool("monitorPeers", false, "Should monitor bootstrap peers and attempt to reconnect")
 	gossipAdvertiseAddress = QueryServerCmd.Flags().String("gossipAdvertiseAddress", "", "External IP to advertize on P2P (use if behind a NAT or running in k8s)")
 	verifyPermissions = QueryServerCmd.Flags().Bool("verifyPermissions", false, `parse and verify the permissions file and then exit with 0 if success, 1 if failure`)
+	ccqFactoryAddress = QueryServerCmd.Flags().String("ccqFactoryAddress", "", "Address of the CCQ staking factory contract for staking-based rate limiting")
+	ipfsGateway = QueryServerCmd.Flags().String("ipfsGateway", "https://ipfs.io", "IPFS gateway URL for fetching conversion tables")
+	policyCacheDuration = QueryServerCmd.Flags().Uint("policyCacheDuration", 300, "Staking policy cache duration in seconds (default: 300 = 5 minutes)")
 
 	// The default health check monitoring is every five seconds, with a five second timeout, and you have to miss two, for 20 seconds total.
 	shutdownDelay1 = QueryServerCmd.Flags().Uint("shutdownDelay1", 25, "Seconds to delay after disabling health check on shutdown")
@@ -167,9 +177,6 @@ func runQueryServer(cmd *cobra.Command, args []string) {
 	if *p2pBootstrap == "" {
 		logger.Fatal("Please specify --bootstrap")
 	}
-	if *permFile == "" {
-		logger.Fatal("Please specify --permFile")
-	}
 	if *ethRPC == "" {
 		logger.Fatal("Please specify --ethRPC")
 	}
@@ -177,9 +184,17 @@ func runQueryServer(cmd *cobra.Command, args []string) {
 		logger.Fatal("Please specify --ethContract")
 	}
 
-	permissions, err := NewPermissions(*permFile, env)
-	if err != nil {
-		logger.Fatal("Failed to load permissions file", zap.String("permFile", *permFile), zap.Error(err))
+	// Permissions file is now optional (deprecated).
+	// If not provided, the CCQ server uses basic signature validation with DoS protection.
+	var permissions *Permissions
+	if *permFile != "" {
+		logger.Info("Loading permissions file (deprecated - consider using staking-based rate limiting)", zap.String("permFile", *permFile))
+		permissions, err = NewPermissions(*permFile, env)
+		if err != nil {
+			logger.Fatal("Failed to load permissions file", zap.String("permFile", *permFile), zap.Error(err))
+		}
+	} else {
+		logger.Info("Running without permissions file. Using basic DoS protection. Guardian nodes will enforce staking-based rate limits.")
 	}
 
 	loggingMap := NewLoggingMap()
@@ -204,6 +219,45 @@ func runQueryServer(cmd *cobra.Command, args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize staking-based rate limiting if factory address provided
+	var policyProvider *queryratelimit.PolicyProvider
+	var limitEnforcer *queryratelimit.Enforcer
+	if *ccqFactoryAddress != "" {
+		if !ethCommon.IsHexAddress(*ccqFactoryAddress) {
+			logger.Fatal("Invalid CCQ factory address", zap.String("address", *ccqFactoryAddress))
+		}
+
+		logger.Info("Initializing staking-based rate limiting",
+			zap.String("factoryAddress", *ccqFactoryAddress),
+			zap.String("ipfsGateway", *ipfsGateway),
+			zap.Uint("policyCacheDurationSeconds", *policyCacheDuration))
+
+		ethClient, err := ethclient.Dial(*ethRPC)
+		if err != nil {
+			logger.Fatal("Failed to connect to Ethereum RPC for staking", zap.Error(err))
+		}
+
+		factoryAddr := ethCommon.HexToAddress(*ccqFactoryAddress)
+		cacheDuration := time.Duration(*policyCacheDuration) * time.Second
+		policyProvider, err = querystaking.CreateStakingPolicyProvider(
+			ethClient,
+			logger,
+			ctx,
+			factoryAddr,
+			*ipfsGateway,
+			cacheDuration,
+		)
+		if err != nil {
+			logger.Fatal("Failed to create staking policy provider", zap.Error(err))
+		}
+
+		limitEnforcer = queryratelimit.NewEnforcer()
+
+		logger.Info("Staking-based rate limiting enabled - CCQ server will enforce rate limits before publishing to gossip")
+	} else {
+		logger.Warn("No CCQ factory address provided. Staking-based rate limiting is DISABLED. Using basic DoS protection only.")
+	}
+
 	// Run p2p
 	pendingResponses := NewPendingResponses(logger)
 	p2pSub, err := runP2P(ctx, priv, *p2pPort, networkID, *p2pBootstrap, *ethRPC, *ethContract, pendingResponses, logger, *monitorPeers, loggingMap, *gossipAdvertiseAddress, protectedPeers)
@@ -213,7 +267,7 @@ func runQueryServer(cmd *cobra.Command, args []string) {
 
 	// Start the HTTP server
 	go func() {
-		s := NewHTTPServer(*listenAddr, p2pSub.topic_req, permissions, signerKey, pendingResponses, logger, env, loggingMap)
+		s := NewHTTPServer(*listenAddr, p2pSub.topic_req, permissions, signerKey, pendingResponses, logger, env, loggingMap, policyProvider, limitEnforcer)
 		logger.Sugar().Infof("Server listening on %s", *listenAddr)
 		err := s.ListenAndServe()
 		if err != nil && err != http.ErrServerClosed {
@@ -279,13 +333,15 @@ func runQueryServer(cmd *cobra.Command, args []string) {
 		cancel()
 	}()
 
-	// Start watching for permissions file updates.
+	// Start watching for permissions file updates (only if permissions are enabled).
 	errC := make(chan error)
-	permWatcherErr := permissions.StartWatcher(ctx, logger, errC)
-	if permWatcherErr != nil {
-		// Cleanup p2p connection.
-		cancel()
-		logger.Fatal("Could not start permissions file watcher", zap.Error(err))
+	if permissions != nil {
+		permWatcherErr := permissions.StartWatcher(ctx, logger, errC)
+		if permWatcherErr != nil {
+			// Cleanup p2p connection.
+			cancel()
+			logger.Fatal("Could not start permissions file watcher", zap.Error(err))
+		}
 	}
 
 	// Star logging cleanup process.
@@ -301,8 +357,10 @@ func runQueryServer(cmd *cobra.Command, args []string) {
 		break
 	}
 
-	// Stop the permissions file watcher.
-	permissions.StopWatcher()
+	// Stop the permissions file watcher (if enabled).
+	if permissions != nil {
+		permissions.StopWatcher()
+	}
 
 	// Shutdown p2p. Without this the same host won't properly discover peers until some timeout
 	p2pSub.sub.Cancel()

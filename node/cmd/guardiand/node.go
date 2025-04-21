@@ -261,13 +261,15 @@ var (
 	governorFlowCancelEnabled *bool
 	coinGeckoApiKey           *string
 
-	ccqEnabled           *bool
-	ccqAllowedRequesters *string
+	ccqEnabled        *bool
+	ccqStakingEnabled *bool
+	ccqFactoryAddress    *string
 	ccqP2pPort           *uint
 	ccqP2pBootstrap      *string
 	ccqProtectedPeers    []string
 	ccqAllowedPeers      *string
 	ccqBackfillCache     *bool
+	ccqIpfsGateway       *string
 
 	gatewayRelayerContract      *string
 	gatewayRelayerKeyPath       *string
@@ -379,6 +381,9 @@ func init() {
 	accountantNttContract = NodeCmd.Flags().String("accountantNttContract", "", "Address of the NTT accountant smart contract on wormchain")
 	accountantNttKeyPath = NodeCmd.Flags().String("accountantNttKeyPath", "", "path to NTT accountant private key for signing transactions")
 	accountantNttKeyPassPhrase = NodeCmd.Flags().String("accountantNttKeyPassPhrase", "", "pass phrase used to unarmor the NTT accountant key file")
+
+	ccqFactoryAddress = NodeCmd.Flags().String("ccqFactoryAddress", "", "Address of the CCQ staking factory contract")
+	ccqIpfsGateway = NodeCmd.Flags().String("ccqIpfsGateway", "https://ipfs.io/ipfs/", "IPFS gateway URL for fetching CCQ conversion tables (default: public gateway, can use local node like http://localhost:8080/ipfs/)")
 
 	aptosRPC = node.RegisterFlagWithValidationOrFail(NodeCmd, "aptosRPC", "Aptos RPC URL", "http://aptos:8080", []string{"http", "https"})
 	aptosAccount = NodeCmd.Flags().String("aptosAccount", "", "aptos account")
@@ -499,7 +504,7 @@ func init() {
 	coinGeckoApiKey = NodeCmd.Flags().String("coinGeckoApiKey", "", "CoinGecko Pro API key. If no API key is provided, CoinGecko requests may be throttled or blocked.")
 
 	ccqEnabled = NodeCmd.Flags().Bool("ccqEnabled", false, "Enable cross chain query support")
-	ccqAllowedRequesters = NodeCmd.Flags().String("ccqAllowedRequesters", "", "Comma separated list of signers allowed to submit cross chain queries")
+	ccqStakingEnabled = NodeCmd.Flags().Bool("ccqStakingEnabled", false, "Enable staking-based rate limiting for CCQ (uses ethRPC for staking contract queries)")
 	ccqP2pPort = NodeCmd.Flags().Uint("ccqP2pPort", 8996, "CCQ P2P UDP listener port")
 	ccqP2pBootstrap = NodeCmd.Flags().String("ccqP2pBootstrap", "", "CCQ P2P bootstrap peers (optional for mainnet or testnet, overrides default, required for unsafeDevMode)")
 	NodeCmd.Flags().StringSliceVarP(&ccqProtectedPeers, "ccqProtectedPeers", "", []string{}, "")
@@ -1851,7 +1856,7 @@ func runNode(cmd *cobra.Command, args []string) {
 		node.GuardianOptionAccountant(*accountantWS, *accountantContract, *accountantCheckEnabled, accountantWormchainConn, *accountantNttContract, accountantNttWormchainConn),
 		node.GuardianOptionGovernor(*chainGovernorEnabled, *governorFlowCancelEnabled, *coinGeckoApiKey),
 		node.GuardianOptionGatewayRelayer(*gatewayRelayerContract, gatewayRelayerWormchainConn),
-		node.GuardianOptionQueryHandler(*ccqEnabled, *ccqAllowedRequesters),
+		node.GuardianOptionQueryHandler(*ccqEnabled, *ccqStakingEnabled, *ethRPC, *ccqFactoryAddress, *ccqIpfsGateway),
 		node.GuardianOptionAdminService(*adminSocketPath, ethRPC, ethContract, rpcMap),
 		node.GuardianOptionStatusServer(*statusAddr),
 		node.GuardianOptionAlternatePublisher(guardianAddrAsBytes, *additionalPublishers),

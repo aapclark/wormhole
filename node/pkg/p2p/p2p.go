@@ -25,7 +25,6 @@ import (
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	libp2ppb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/protocol"
@@ -43,8 +42,10 @@ import (
 
 const DefaultPort = 8999
 
-const P2P_VALIDATE_QUEUE_SIZE = 1024
-const P2P_SUBSCRIPTION_BUFFER_SIZE = 1024
+const (
+	P2P_VALIDATE_QUEUE_SIZE      = 1024
+	P2P_SUBSCRIPTION_BUFFER_SIZE = 1024
+)
 
 // TESTNET_BOOTSTRAP_DHI configures how many nodes may connect to the testnet bootstrap node. This number should not exceed HighWaterMark.
 const TESTNET_BOOTSTRAP_DHI = 350
@@ -76,11 +77,6 @@ var (
 			Name: "wormhole_p2p_receive_channel_overflow",
 			Help: "Total number of p2p received messages dropped due to channel overflow",
 		}, []string{"type"})
-	p2pDrop = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "wormhole_p2p_drops",
-			Help: "Total number of messages that were dropped by libp2p",
-		})
 )
 
 var heartbeatMessagePrefix = []byte("heartbeat|")
@@ -153,8 +149,10 @@ func DefaultComponents() *Components {
 	}
 }
 
-const LowWaterMarkDefault = 100
-const HighWaterMarkDefault = 400
+const (
+	LowWaterMarkDefault  = 100
+	HighWaterMarkDefault = 400
+)
 
 func DefaultConnectionManager() (*connmgr.BasicConnMgr, error) {
 	return connmgr.NewConnManager(
@@ -164,19 +162,6 @@ func DefaultConnectionManager() (*connmgr.BasicConnMgr, error) {
 		// GracePeriod set to 0 means that new peers are not protected by a grace period
 		connmgr.WithGracePeriod(0),
 	)
-}
-
-// traceHandler is used to intercept libp2p trace events so we can peg metrics.
-type traceHandler struct {
-}
-
-// Trace is the interface to the libp2p trace handler. It pegs metrics as appropriate.
-func (*traceHandler) Trace(evt *libp2ppb.TraceEvent) {
-	if evt.Type != nil {
-		if *evt.Type == libp2ppb.TraceEvent_DROP_RPC {
-			p2pDrop.Inc()
-		}
-	}
 }
 
 // BootstrapAddrs takes a comma-separated string of multi-address strings and returns an array of []peer.AddrInfo that does not include `self`.
@@ -222,7 +207,6 @@ func ConnectToPeers(ctx context.Context, logger *zap.Logger, h host.Host, peers 
 }
 
 func NewHost(logger *zap.Logger, ctx context.Context, networkID string, bootstrapPeers string, components *Components, priv crypto.PrivKey) (host.Host, error) {
-
 	// if an override of the advertised gossip addresses is requested
 	// check & render address once for use in the AddrsFactory below
 	var gossipAdvertiseAddress multiaddr.Multiaddr
@@ -359,11 +343,11 @@ func Run(params *RunParams) func(ctx context.Context) error {
 		}
 
 		logger.Info("connecting to pubsub")
-		ourTracer := &traceHandler{}
+		ourTracer := &gossipTracer{}
 		ps, err := pubsub.NewGossipSub(ctx, h,
 			pubsub.WithValidateQueueSize(P2P_VALIDATE_QUEUE_SIZE),
 			pubsub.WithGossipSubParams(params.components.GossipParams),
-			pubsub.WithEventTracer(ourTracer),
+			pubsub.WithRawTracer(ourTracer),
 			// TODO: Investigate making this change. May need to use LaxSign until everyone has upgraded to that.
 			// pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
 		)
@@ -652,7 +636,9 @@ func Run(params *RunParams) func(ctx context.Context) error {
 
 					envelope := &gossipv1.GossipMessage{
 						Message: &gossipv1.GossipMessage_SignedObservationRequest{
-							SignedObservationRequest: sReq}}
+							SignedObservationRequest: sReq,
+						},
+					}
 
 					b, err = proto.Marshal(envelope)
 					if err != nil {

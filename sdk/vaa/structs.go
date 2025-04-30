@@ -293,7 +293,6 @@ func ChainIDFromNumber[N number](n N) (ChainID, error) {
 	case int8, uint8, int16, uint16:
 		// Because these values have been checked to be non-negative, we can return early with a simple conversion.
 		return ChainID(n), nil
-
 	}
 	// Use intermediate uint64 to safely handle conversion and allow comparison with MaxUint16.
 	// This is safe to do because the negative case is already handled.
@@ -302,7 +301,6 @@ func ChainIDFromNumber[N number](n N) (ChainID, error) {
 		return ChainIDUnset, fmt.Errorf("chainID must be less than or equal to %d but got %d", math.MaxUint16, n)
 	}
 	return ChainID(n), nil
-
 }
 
 // KnownChainIDFromNumber converts an unsigned integer into a known ChainID. It is a wrapper function for ChainIDFromNumber
@@ -321,14 +319,12 @@ func KnownChainIDFromNumber[N number](n N) (ChainID, error) {
 	}
 
 	return ChainIDUnset, fmt.Errorf("no known ChainID for input %d", n)
-
 }
 
 // StringToKnownChainID converts from a string representation of a chain into a ChainID that is registered in the SDK.
 // The argument can be either a numeric string representation of a number or a known chain name such as "solana".
 // Inputs of unknown ChainIDs, including 0, will result in an error.
 func StringToKnownChainID(s string) (ChainID, error) {
-
 	// Try to convert from chain name first, and return early if it's found.
 	id, err := ChainIDFromString(s)
 	if err == nil {
@@ -615,7 +611,7 @@ const (
 	// NOTE: 27 belongs to a chain that was never deployed.
 	// ChainIDXpla is the ChainID of Xpla
 	ChainIDXpla ChainID = 28
-	//ChainIDBtc is the ChainID of Bitcoin
+	// ChainIDBtc is the ChainID of Bitcoin
 	ChainIDBtc ChainID = 29
 	// ChainIDBase is the ChainID of Base
 	ChainIDBase ChainID = 30
@@ -661,7 +657,7 @@ const (
 	ChainIDMezo ChainID = 50
 	// ChainIDFogo is the ChainID of Fogo
 	ChainIDFogo ChainID = 51
-	//ChainIDWormchain is the ChainID of Wormchain
+	// ChainIDWormchain is the ChainID of Wormchain
 
 	// Wormchain is in it's own range.
 	ChainIDWormchain ChainID = 3104
@@ -701,7 +697,8 @@ const (
 	ChainIDHolesky ChainID = 10006
 	// ChainIDPolygonSepolia is the ChainID of Polygon on Sepolia
 	ChainIDPolygonSepolia ChainID = 10007
-	// OBSOLETE: ChainIDMonadDevnet ChainID = 10008
+	// TODO: revert comment after testing
+	ChainIDMonadDevnet ChainID = 10008
 
 	// Minimum VAA size is derrived from the following assumptions:
 	//  HEADER
@@ -886,7 +883,6 @@ func verifySignature(vaa_digest []byte, signature *Signature, address common.Add
 // Should not be public as other message types should be verified using a message prefix.
 // Returns false when the signatures or addresses are empty.
 func verifySignatures(vaa_digest []byte, signatures []*Signature, addresses []common.Address) bool {
-
 	// An empty set is neither valid nor invalid, it's just specified incorrectly.
 	// To help with backward-compatibility, return false instead of changing the function
 	// signature to return an error.

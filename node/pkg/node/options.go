@@ -19,12 +19,15 @@ import (
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
 	"github.com/certusone/wormhole/node/pkg/query"
 	"github.com/certusone/wormhole/node/pkg/query/queryratelimit"
+	"github.com/certusone/wormhole/node/pkg/query/querystaking"
 	"github.com/certusone/wormhole/node/pkg/readiness"
 	"github.com/certusone/wormhole/node/pkg/supervisor"
 	"github.com/certusone/wormhole/node/pkg/watchers"
 	"github.com/certusone/wormhole/node/pkg/watchers/ibc"
 	"github.com/certusone/wormhole/node/pkg/wormconn"
 	ethCommon "github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gorilla/mux"
 	libp2p_crypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -130,11 +133,12 @@ func GuardianOptionP2P(
 			)
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionQueryHandler configures the Cross Chain Query module.
-func GuardianOptionQueryHandler(ccqEnabled bool, allowedRequesters string) *GuardianOption {
+func GuardianOptionQueryHandler(ccqEnabled bool, allowedRequesters string, stakingEnabled bool, ethRPCURL string, ccqFactoryAddress string, ipfsGateway string) *GuardianOption {
 	return &GuardianOption{
 		name: "query",
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
@@ -160,36 +164,72 @@ func GuardianOptionQueryHandler(ccqEnabled bool, allowedRequesters string) *Guar
 				return fmt.Errorf("no allowed requestors specified, ccqAllowedRequesters: `%s`", allowedRequesters)
 			}
 
-			policyProvider, err := queryratelimit.NewPolicyProvider(
-				queryratelimit.WithPolicyProviderLogger(logger),
-				queryratelimit.WithPolicyProviderCacheDuration(24*time.Hour),
-				queryratelimit.WithPolicyProviderFetcher(func(ctx context.Context, key ethCommon.Address) (*queryratelimit.Policy, error) {
-					_, ok := result[key]
-					if !ok {
-						return &queryratelimit.Policy{}, nil
-					}
-					return &queryratelimit.Policy{
-						Limits: queryratelimit.Limits{
-							Types: map[uint8]queryratelimit.Rule{
-								uint8(query.EthCallQueryRequestType): {
-									MaxPerMinute: 15 * 60,
-									MaxPerSecond: 15,
-								},
-								uint8(query.SolanaAccountQueryRequestType): {
-									MaxPerMinute: 15 * 60,
-									MaxPerSecond: 15,
-								},
-								uint8(query.SolanaPdaQueryRequestType): {
-									MaxPerMinute: 15 * 60,
-									MaxPerSecond: 15,
+			var policyProvider *queryratelimit.PolicyProvider
+			var err error
+
+			if stakingEnabled && ethRPCURL != "" {
+				// Create staking-based policy provider
+				logger.Info("ccq: using staking-based rate limiting", zap.String("rpcUrl", ethRPCURL), zap.String("ipfsGateway", ipfsGateway))
+
+				// Validate IPFS gateway URL
+				if ipfsGateway == "" {
+					return fmt.Errorf("if staking is enabled, --ccqIpfsGateway must be specified")
+				}
+				if !strings.HasPrefix(ipfsGateway, "http://") && !strings.HasPrefix(ipfsGateway, "https://") {
+					return fmt.Errorf("invalid IPFS gateway URL: must start with http:// or https://")
+				}
+
+				// Load factory address configuration
+				poolAddresses, err := querystaking.LoadPoolAddresses(ccqFactoryAddress, logger)
+				if err != nil {
+					return fmt.Errorf("failed to load pool addresses: %w", err)
+				}
+
+				rpcClient, err := rpc.Dial(ethRPCURL)
+				if err != nil {
+					return fmt.Errorf("failed to dial ethereum RPC for staking queries: %w", err)
+				}
+				ethClient := ethclient.NewClient(rpcClient)
+
+				policyProvider, err = querystaking.CreateStakingPolicyProvider(ethClient, logger, ctx, poolAddresses.FactoryAddress, ipfsGateway)
+				if err != nil {
+					return fmt.Errorf("failed to create staking policy provider: %w", err)
+				}
+			} else {
+				// Create basic allowlist-based policy provider
+				logger.Info("ccq: using basic allowlist-based rate limiting")
+
+				policyProvider, err = queryratelimit.NewPolicyProvider(
+					queryratelimit.WithPolicyProviderLogger(logger),
+					queryratelimit.WithPolicyProviderCacheDuration(24*time.Hour),
+					queryratelimit.WithPolicyProviderFetcher(func(ctx context.Context, key ethCommon.Address) (*queryratelimit.Policy, error) {
+						_, ok := result[key]
+						if !ok {
+							return &queryratelimit.Policy{}, nil
+						}
+						return &queryratelimit.Policy{
+							Limits: queryratelimit.Limits{
+								Types: map[uint8]queryratelimit.Rule{
+									uint8(query.EthCallQueryRequestType): {
+										MaxPerMinute: 15 * 60,
+										MaxPerSecond: 15,
+									},
+									uint8(query.SolanaAccountQueryRequestType): {
+										MaxPerMinute: 15 * 60,
+										MaxPerSecond: 15,
+									},
+									uint8(query.SolanaPdaQueryRequestType): {
+										MaxPerMinute: 15 * 60,
+										MaxPerSecond: 15,
+									},
 								},
 							},
-						},
-					}, nil
-				}),
-			)
-			if err != nil {
-				return fmt.Errorf("failed to create rate limit policy provider: %w", err)
+						}, nil
+					}),
+				)
+				if err != nil {
+					return fmt.Errorf("failed to create basic policy provider: %w", err)
+				}
 			}
 
 			g.queryHandler = query.NewQueryHandler(
@@ -204,7 +244,8 @@ func GuardianOptionQueryHandler(ccqEnabled bool, allowedRequesters string) *Guar
 			)
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionNoAccountant disables the accountant. It is a shorthand for GuardianOptionAccountant("", "", false, nil)
@@ -215,7 +256,8 @@ func GuardianOptionNoAccountant() *GuardianOption {
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			logger.Info("accountant is disabled", zap.String("component", "gacct"))
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionAccountant configures the Accountant module.
@@ -279,7 +321,8 @@ func GuardianOptionAccountant(
 			)
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionGovernor enables or disables the governor.
@@ -293,7 +336,6 @@ func GuardianOptionGovernor(governorEnabled bool, flowCancelEnabled bool, coinGe
 				if flowCancelEnabled {
 					logger.Info("chain governor is enabled with flow cancel enabled")
 				} else {
-
 					logger.Info("chain governor is enabled without flow cancel")
 				}
 				if coinGeckoApiKey != "" {
@@ -304,7 +346,8 @@ func GuardianOptionGovernor(governorEnabled bool, flowCancelEnabled bool, coinGe
 				logger.Info("chain governor is disabled")
 			}
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionGatewayRelayer configures the Gateway Relayer module. If the gateway relayer smart contract is configured, we will instantiate
@@ -323,7 +366,8 @@ func GuardianOptionGatewayRelayer(gatewayRelayerContract string, wormchainConn *
 			)
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionStatusServer configures the status server, including /readyz and /metrics.
@@ -380,7 +424,8 @@ func GuardianOptionStatusServer(statusAddr string) *GuardianOption {
 				}
 			}
 			return nil
-		}}
+		},
+	}
 }
 
 type IbcWatcherConfig struct {
@@ -397,7 +442,6 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 	return &GuardianOption{
 		name: "watchers",
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
-
 			chainObsvReqC := make(map[vaa.ChainID]chan *gossipv1.ObservationRequest)
 
 			chainMsgC := make(map[vaa.ChainID]chan *common.MessagePublication)
@@ -499,7 +543,6 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 				}
 
 				runnable, reobserver, err := wc.Create(chainMsgC[wc.GetChainID()], chainObsvReqC[wc.GetChainID()], g.chainQueryReqC[wc.GetChainID()], chainQueryResponseC[wc.GetChainID()], g.setC.writeC, g.env)
-
 				if err != nil {
 					return fmt.Errorf("error creating watcher: %w", err)
 				}
@@ -549,7 +592,8 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 			go handleReobservationRequests(ctx, clock, logger, g.obsvReqC.readC, chainObsvReqC)
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionAdminService enables the admin rpc service on a unix socket.
@@ -581,7 +625,8 @@ func GuardianOptionAdminService(socketPath string, ethRpc *string, ethContract *
 			g.runnables["admin"] = adminService
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionPublicRpcSocket enables the public rpc service on a unix socket
@@ -600,7 +645,8 @@ func GuardianOptionPublicRpcSocket(publicGRPCSocketPath string, publicRpcLogDeta
 			g.runnables["publicrpcsocket"] = publicrpcUnixService
 			g.publicrpcServer = publicrpcServer
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionPublicrpcTcpService enables the public gRPC service on TCP.
@@ -613,7 +659,8 @@ func GuardianOptionPublicrpcTcpService(publicRpc string, publicRpcLogDetail comm
 			publicrpcService := publicrpcTcpServiceRunnable(logger, publicRpc, publicRpcLogDetail, g.db, g.gst, g.gov)
 			g.runnables["publicrpc"] = publicrpcService
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionPublicWeb enables the public rpc service on http, i.e. gRPC-web and JSON-web.
@@ -627,7 +674,8 @@ func GuardianOptionPublicWeb(listenAddr string, publicGRPCSocketPath string, tls
 				tlsHostname, tlsProdEnv, tlsCacheDir)
 			g.runnables["publicweb"] = publicwebService
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionDatabase configures the main database to be used for this guardian node.
@@ -638,7 +686,8 @@ func GuardianOptionDatabase(db *guardianDB.Database) *GuardianOption {
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			g.db = db
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionAlternatePublisher enables the alternate publisher if it is configured.
@@ -647,7 +696,6 @@ func GuardianOptionAlternatePublisher(guardianAddr []byte, configs []string) *Gu
 		name: "alternate-publisher",
 
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
-
 			var err error
 			g.alternatePublisher, err = altpub.NewAlternatePublisher(logger, guardianAddr, configs)
 			if err != nil {
@@ -659,7 +707,8 @@ func GuardianOptionAlternatePublisher(guardianAddr []byte, configs []string) *Gu
 			}
 
 			return nil
-		}}
+		},
+	}
 }
 
 // GuardianOptionProcessor enables the default processor, which is required to make consensus on messages.
@@ -671,7 +720,6 @@ func GuardianOptionProcessor(networkId string) *GuardianOption {
 		dependencies: []string{"accountant", "alternate-publisher", "db", "gateway-relayer", "governor"},
 
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
-
 			g.runnables["processor"] = processor.NewProcessor(ctx,
 				g.db,
 				g.msgC.readC,
@@ -692,7 +740,8 @@ func GuardianOptionProcessor(networkId string) *GuardianOption {
 			).Run
 
 			return nil
-		}}
+		},
+	}
 }
 
 // getStaticFeatureFlags creates the list of feature flags that do not change after initialization and adds them to the ones passed in.

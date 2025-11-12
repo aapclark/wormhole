@@ -75,6 +75,7 @@ config.define_bool("ibc_relayer", False, "Enable IBC relayer between cosmos chai
 config.define_bool("redis", False, "Enable a redis instance")
 config.define_bool("generic_relayer", False, "Enable the generic relayer off-chain component")
 config.define_bool("query_server", False, "Enable cross-chain query server")
+config.define_bool("kubo", False, "Enable kubo/IPFS node")
 
 cfg = config.parse()
 num_guardians = int(cfg.get("num", "1"))
@@ -102,6 +103,7 @@ btc = cfg.get("btc", False)
 redis = cfg.get('redis', ci)
 generic_relayer = cfg.get("generic_relayer", ci)
 query_server = cfg.get("query_server", ci)
+kubo = cfg.get("kubo", query_server)
 
 if ci:
     guardiand_loglevel = cfg.get("guardiand_loglevel", "warn")
@@ -159,7 +161,7 @@ def command_with_dlv(argv):
     ] + argv[1:]
 
 def generate_bootstrap_peers(num_guardians, port_num):
-    # Improve the chances of the guardians discovering each other in tilt by making them all bootstrap peers. 
+    # Improve the chances of the guardians discovering each other in tilt by making them all bootstrap peers.
     # The devnet guardian uses deterministic P2P peer IDs based on the guardian index. The peer IDs here
     # were generated using `DeterministicP2PPrivKeyByIndex` in `node/pkg/devnet/deterministic_p2p_key.go`.
     peer_ids = [
@@ -181,7 +183,7 @@ def generate_bootstrap_peers(num_guardians, port_num):
         "12D3KooW9yvKfP5HgVaLnNaxWywo3pLAEypk7wjUcpgKwLznk5gQ",
         "12D3KooWRuYVGEsecrJJhZsSoKf1UNdBVYKFCmFLNj9ucZiSQCYj",
         "12D3KooWGEcD5sW5osB6LajkHGqiGc3W8eKfYwnJVVqfujkpLWX2",
-        "12D3KooWQYz2inBsgiBoqNtmEn1qeRBr9B8cdishFuBgiARcfMcY" 
+        "12D3KooWQYz2inBsgiBoqNtmEn1qeRBr9B8cdishFuBgiARcfMcY"
     ]
     bootstrap = ""
     for idx in range(num_guardians):
@@ -216,7 +218,14 @@ def build_node_yaml():
                     bootstrapPeers,
                     "--ccqP2pBootstrap",
                     ccqBootstrapPeers,
-                ]            
+                ]
+
+            if query_server:
+                container["command"] += [
+                    "--ccqStakingEnabled",
+                    "--ccqFactoryAddress",
+                    "0xb4ffe5983b0b748124577af4d16953bd096b6897",
+                ]
 
             if aptos:
                 container["command"] += [
@@ -359,7 +368,11 @@ def build_node_yaml():
                     "--gatewayWS",
                     "ws://wormchain:26657/websocket",
                     "--gatewayLCD",
-                    "http://wormchain:1317"
+                    "http://wormchain:1317",
+
+                    "--ccqStakingEnabled",
+                    "--ccqFactoryAddress",
+                    "0xb4ffe5983b0b748124577af4d16953bd096b6897",
                 ]
 
     return encode_yaml_stream(node_yaml_with_replicas)
@@ -658,7 +671,7 @@ if ci_tests:
                     "BOOTSTRAP_PEERS", str(ccqBootstrapPeers)),
                     "MAX_WORKERS", max_workers))
     )
-    
+
     # separate resources to parallelize docker builds
     k8s_resource(
         "sdk-ci-tests",
@@ -989,13 +1002,38 @@ if aptos:
         trigger_mode = trigger_mode,
     )
 
+# kubo/IPFS
+if kubo:
+    docker_build(
+        ref = "kubo-node",
+        context = ".",
+        dockerfile_contents = """
+FROM ipfs/kubo:latest
+# No additional configuration needed - ephemeral setup is done via command in k8s yaml
+        """,
+    )
+
+    k8s_yaml_with_ns("devnet/kubo.yaml")
+
+    k8s_resource(
+        "kubo",
+        port_forwards = [
+            port_forward(5001, name = "IPFS API [:5001]", host = webHost),
+            port_forward(8080, name = "IPFS Gateway [:8080]", host = webHost),
+        ],
+        labels = ["kubo"],
+        trigger_mode = trigger_mode,
+    )
+
 def build_query_server_yaml():
     qs_yaml = read_yaml_stream("devnet/query-server.yaml")
 
     for obj in qs_yaml:
         if obj["kind"] == "StatefulSet" and obj["metadata"]["name"] == "query-server":
             container = obj["spec"]["template"]["spec"]["containers"][0]
-            container["command"] += ["--bootstrap="+ccqBootstrapPeers]
+            container["command"] += [
+                "--bootstrap="+ccqBootstrapPeers,
+            ]
 
     return encode_yaml_stream(qs_yaml)
 

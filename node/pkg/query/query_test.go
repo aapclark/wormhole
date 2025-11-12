@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/certusone/wormhole/node/pkg/common"
+	"github.com/certusone/wormhole/node/pkg/query/queryratelimit"
 	gossipv1 "github.com/certusone/wormhole/node/pkg/proto/gossip/v1"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 
@@ -45,6 +46,79 @@ var (
 
 	watcherChainsForTest = []vaa.ChainID{vaa.ChainIDPolygon, vaa.ChainIDBSC, vaa.ChainIDArbitrum}
 )
+
+// parseAllowedRequesters parses a comma-separated list of allowed requesters for testing
+func parseAllowedRequesters(allowedRequesters string) (map[ethCommon.Address]struct{}, error) {
+	if allowedRequesters == "" {
+		return nil, fmt.Errorf("allowedRequesters cannot be empty")
+	}
+
+	var nullAddr ethCommon.Address
+	result := make(map[ethCommon.Address]struct{})
+	for _, str := range strings.Split(allowedRequesters, ",") {
+		str = strings.TrimSpace(str)
+		if str == "" {
+			continue
+		}
+		addr := ethCommon.BytesToAddress(ethCommon.Hex2Bytes(strings.TrimPrefix(str, "0x")))
+		if addr == nullAddr {
+			return nil, fmt.Errorf("invalid address: %s", str)
+		}
+		result[addr] = struct{}{}
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no valid addresses found")
+	}
+
+	return result, nil
+}
+
+// createTestRateLimitComponents creates mock rate limiting components for tests
+func createTestRateLimitComponents(allowedRequesters map[ethCommon.Address]struct{}) (*queryratelimit.Enforcer, *queryratelimit.PolicyProvider, error) {
+	enforcer := queryratelimit.NewEnforcer()
+
+	// Create a policy provider that uses the allowed requesters map
+	policyProvider, err := queryratelimit.NewPolicyProvider(
+		queryratelimit.WithPolicyProviderFetcher(func(ctx context.Context, key ethCommon.Address) (*queryratelimit.Policy, error) {
+			_, ok := allowedRequesters[key]
+			if !ok {
+				return &queryratelimit.Policy{}, nil
+			}
+			return &queryratelimit.Policy{
+				Limits: queryratelimit.Limits{
+					Types: map[uint8]queryratelimit.Rule{
+						uint8(EthCallQueryRequestType): {
+							MaxPerMinute: 15 * 60,
+							MaxPerSecond: 15,
+						},
+						uint8(EthCallByTimestampQueryRequestType): {
+							MaxPerMinute: 15 * 60,
+							MaxPerSecond: 15,
+						},
+						uint8(EthCallWithFinalityQueryRequestType): {
+							MaxPerMinute: 15 * 60,
+							MaxPerSecond: 15,
+						},
+						uint8(SolanaAccountQueryRequestType): {
+							MaxPerMinute: 15 * 60,
+							MaxPerSecond: 15,
+						},
+						uint8(SolanaPdaQueryRequestType): {
+							MaxPerMinute: 15 * 60,
+							MaxPerSecond: 15,
+						},
+					},
+				},
+			}, nil
+		}),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return enforcer, policyProvider, nil
+}
 
 // createPerChainQueryForEthCall creates a per chain query for an eth_call for use in tests. The To and Data fields are meaningless gibberish, not ABI.
 func createPerChainQueryForEthCall(
@@ -418,6 +492,10 @@ func createQueryHandlerForTestWithoutPublisher(t *testing.T, ctx context.Context
 	ccqAllowedRequestersList, err := parseAllowedRequesters(testSigner)
 	require.NoError(t, err)
 
+	// Create rate limiting components
+	enforcer, policyProvider, err := createTestRateLimitComponents(ccqAllowedRequestersList)
+	require.NoError(t, err)
+
 	// Inbound observation requests from the p2p service (for all chains)
 	md.signedQueryReqReadC, md.signedQueryReqWriteC = makeChannelPair[*gossipv1.SignedQueryRequest](SignedQueryRequestChannelSize)
 
@@ -436,7 +514,7 @@ func createQueryHandlerForTestWithoutPublisher(t *testing.T, ctx context.Context
 	md.resetState()
 
 	go func() {
-		err := handleQueryRequestsImpl(ctx, logger, md.signedQueryReqReadC, md.chainQueryReqC, ccqAllowedRequestersList,
+		err := handleQueryRequestsImpl(ctx, logger, enforcer, policyProvider, md.signedQueryReqReadC, md.chainQueryReqC,
 			md.queryResponseReadC, md.queryResponsePublicationWriteC, common.GoTest, requestTimeoutForTest, retryIntervalForTest, auditIntervalForTest)
 		assert.NoError(t, err)
 	}()

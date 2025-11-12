@@ -49,6 +49,7 @@ var (
 	monitorPeers           *bool
 	gossipAdvertiseAddress *string
 	verifyPermissions      *bool
+	ccqFactoryAddress      *string
 )
 
 const DEV_NETWORK_ID = "/wormhole/dev"
@@ -73,6 +74,7 @@ func init() {
 	monitorPeers = QueryServerCmd.Flags().Bool("monitorPeers", false, "Should monitor bootstrap peers and attempt to reconnect")
 	gossipAdvertiseAddress = QueryServerCmd.Flags().String("gossipAdvertiseAddress", "", "External IP to advertize on P2P (use if behind a NAT or running in k8s)")
 	verifyPermissions = QueryServerCmd.Flags().Bool("verifyPermissions", false, `parse and verify the permissions file and then exit with 0 if success, 1 if failure`)
+	ccqFactoryAddress = QueryServerCmd.Flags().String("ccqFactoryAddress", "", "Address of the CCQ staking factory contract")
 
 	// The default health check monitoring is every five seconds, with a five second timeout, and you have to miss two, for 20 seconds total.
 	shutdownDelay1 = QueryServerCmd.Flags().Uint("shutdownDelay1", 25, "Seconds to delay after disabling health check on shutdown")

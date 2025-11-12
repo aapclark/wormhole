@@ -66,4 +66,6 @@ var (
 			Help:    "Time from time spent in the watcher per query in ms by chain",
 			Buckets: []float64{1.0, 5.0, 10.0, 100.0, 250.0, 500.0, 1000.0, 5000.0, 10000.0, 30000.0},
 		}, []string{"chain_name"})
+
+	// Additional staking metrics are defined in querystaking/pools.go
 )

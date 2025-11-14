@@ -607,6 +607,7 @@ k8s_resource(
     trigger_mode = trigger_mode,
 )
 
+
 if evm2:
     k8s_yaml_with_ns("devnet/eth-devnet2.yaml")
 
@@ -1019,7 +1020,7 @@ FROM ipfs/kubo:latest
         "kubo",
         port_forwards = [
             port_forward(5001, name = "IPFS API [:5001]", host = webHost),
-            port_forward(8080, name = "IPFS Gateway [:8080]", host = webHost),
+            port_forward(10010, container_port = 8080, name = "IPFS Gateway [:10010]", host = webHost),
         ],
         labels = ["kubo"],
         trigger_mode = trigger_mode,

@@ -56,13 +56,22 @@ spec:
         - name: ipfs-data
           configMap:
             name: kubo-data
+        - name: ipfs-repo
+          emptyDir: {}
       containers:
         - name: kubo
           image: kubo-node
+          env:
+            - name: IPFS_PATH
+              value: /tmp/ipfs
+            - name: IPFS_TELEMETRY
+              value: "off"
           volumeMounts:
             - name: ipfs-data
               mountPath: /data-to-add
               readOnly: true
+            - name: ipfs-repo
+              mountPath: /tmp/ipfs
           command:
             - sh
             - -c
@@ -75,6 +84,8 @@ spec:
               ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
               ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin '["*"]'
               ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods '["GET", "POST", "PUT"]'
+              ipfs config --bool Gateway.NoFetch false
+              ipfs config --bool Gateway.UseSubdomains false
 
               # Start daemon in background to add files
               ipfs daemon --enable-gc &
@@ -88,7 +99,8 @@ spec:
 
               # Add JSON data to IPFS and capture CID
               echo "Adding ccq-rate-limits.json to IPFS..."
-              CID=$(ipfs add -Q /data-to-add/ccq-rate-limits.json)
+              # Add with raw-leaves to get content-only CID
+              CID=$(cat /data-to-add/ccq-rate-limits.json | ipfs add -Q --raw-leaves --cid-version=1)
               echo "=========================================="
               echo "CCQ Rate Limits CID: $CID"
               echo "=========================================="

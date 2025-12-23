@@ -1,9 +1,12 @@
 package common
 
 import (
+	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
 	"math/big"
+	"os"
 	"testing"
 	"time"
 
@@ -32,20 +35,20 @@ const (
 )
 
 func encodePayloadBytes(payload *vaa.TransferPayloadHdr) []byte {
-	bytes := make([]byte, 101)
-	bytes[0] = payload.Type
+	bz := make([]byte, 101)
+	bz[0] = payload.Type
 
 	amtBytes := payload.Amount.Bytes()
 	if len(amtBytes) > 32 {
 		panic("amount will not fit in 32 bytes!")
 	}
-	copy(bytes[33-len(amtBytes):33], amtBytes)
+	copy(bz[33-len(amtBytes):33], amtBytes)
 
-	copy(bytes[33:65], payload.OriginAddress.Bytes())
-	binary.BigEndian.PutUint16(bytes[65:67], uint16(payload.OriginChain))
-	copy(bytes[67:99], payload.TargetAddress.Bytes())
-	binary.BigEndian.PutUint16(bytes[99:101], uint16(payload.TargetChain))
-	return bytes
+	copy(bz[33:65], payload.OriginAddress.Bytes())
+	binary.BigEndian.PutUint16(bz[65:67], uint16(payload.OriginChain))
+	copy(bz[67:99], payload.TargetAddress.Bytes())
+	binary.BigEndian.PutUint16(bz[99:101], uint16(payload.TargetChain))
+	return bz
 }
 
 // makeTestMsgPub is a helper function that generates a Message Publication.
@@ -91,11 +94,11 @@ func TestRoundTripMarshal(t *testing.T) {
 	orig := makeTestMsgPub(t)
 	var loaded MessagePublication
 
-	bytes, writeErr := orig.MarshalBinary()
+	bz, writeErr := orig.MarshalBinary()
 	require.NoError(t, writeErr)
-	t.Logf("marshaled bytes: %x", bytes)
+	t.Logf("marshaled bytes: %x", bz)
 
-	readErr := loaded.UnmarshalBinary(bytes)
+	readErr := loaded.UnmarshalBinary(bz)
 	require.NoError(t, readErr)
 
 	require.Equal(t, *orig, loaded)
@@ -402,10 +405,10 @@ func TestDeprecatedSerializeAndDeserializeOfMessagePublication(t *testing.T) {
 		verificationState: Anomalous,
 	}
 
-	bytes, err := msg1.Marshal()
+	bz, err := msg1.Marshal()
 	require.NoError(t, err)
 
-	msg2, err := UnmarshalMessagePublication(bytes)
+	msg2, err := UnmarshalMessagePublication(bz)
 	require.NoError(t, err)
 
 	require.Equal(t, msg1.TxID, msg2.TxID)
@@ -460,10 +463,10 @@ func TestSerializeAndDeserializeOfMessagePublicationWithEmptyTxID(t *testing.T) 
 		ConsistencyLevel: 32,
 	}
 
-	bytes, err := msg1.Marshal()
+	bz, err := msg1.Marshal()
 	require.NoError(t, err)
 
-	msg2, err := UnmarshalMessagePublication(bytes)
+	msg2, err := UnmarshalMessagePublication(bz)
 	require.NoError(t, err)
 	assert.Equal(t, msg1, msg2)
 
@@ -507,10 +510,10 @@ func TestSerializeAndDeserializeOfMessagePublicationWithArbitraryTxID(t *testing
 		ConsistencyLevel: 32,
 	}
 
-	bytes, err := msg1.Marshal()
+	bz, err := msg1.Marshal()
 	require.NoError(t, err)
 
-	msg2, err := UnmarshalMessagePublication(bytes)
+	msg2, err := UnmarshalMessagePublication(bz)
 	require.NoError(t, err)
 	assert.Equal(t, msg1, msg2)
 
@@ -568,10 +571,10 @@ func TestSerializeAndDeserializeOfMessagePublicationWithBigPayload(t *testing.T)
 		ConsistencyLevel: 32,
 	}
 
-	bytes, err := msg1.Marshal()
+	bz, err := msg1.Marshal()
 	require.NoError(t, err)
 
-	msg2, err := UnmarshalMessagePublication(bytes)
+	msg2, err := UnmarshalMessagePublication(bz)
 	require.NoError(t, err)
 
 	assert.Equal(t, msg1, msg2)
@@ -609,11 +612,11 @@ func TestMarshalUnmarshalJSONOfMessagePublication(t *testing.T) {
 		ConsistencyLevel: 32,
 	}
 
-	bytes, err := msg1.MarshalJSON()
+	bz, err := msg1.MarshalJSON()
 	require.NoError(t, err)
 
 	var msg2 MessagePublication
-	err = msg2.UnmarshalJSON(bytes)
+	err = msg2.UnmarshalJSON(bz)
 	require.NoError(t, err)
 	assert.Equal(t, *msg1, msg2)
 
@@ -655,11 +658,11 @@ func TestMarshalUnmarshalJSONOfMessagePublicationWithArbitraryTxID(t *testing.T)
 		ConsistencyLevel: 32,
 	}
 
-	bytes, err := msg1.MarshalJSON()
+	bz, err := msg1.MarshalJSON()
 	require.NoError(t, err)
 
 	var msg2 MessagePublication
-	err = msg2.UnmarshalJSON(bytes)
+	err = msg2.UnmarshalJSON(bz)
 	require.NoError(t, err)
 	assert.Equal(t, *msg1, msg2)
 
@@ -799,6 +802,166 @@ func TestMessagePublication_SetVerificationState(t *testing.T) {
 			if err := msg.SetVerificationState(tt.arg); (err != nil) != tt.wantErr {
 				t.Errorf("MessagePublication.SetVerificationState() error = %v, wantErr %v", err, tt.wantErr)
 			}
+		})
+	}
+}
+
+func TestSafeRead(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{
+			"happy path",
+			MaxSafeInputSize,
+			false,
+		},
+		{
+			"error: too big",
+			MaxSafeInputSize + 1,
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temporary file and write bytes to it
+			tmp := os.TempDir()
+
+			f, err := os.CreateTemp(tmp, "tmpfile-")
+			require.NoError(t, err)
+
+			defer f.Close()
+			defer os.Remove(f.Name())
+
+			// Fill slice with zeroes.
+			data := make([]byte, tt.size)
+			if _, err := f.Write(data); err != nil {
+				require.NoError(t, err)
+			}
+
+			// File pointer is at EOF at this point. Reset to the start.
+			_, err = f.Seek(0, io.SeekStart)
+			require.NoError(t, err)
+
+			got, err := SafeRead(f)
+			if tt.wantErr {
+				require.Error(t, err, "SafeRead() should have returned an error")
+				require.Nil(t, got, "got should be nil when error occurs")
+			} else {
+				require.NoError(t, err, "SafeRead() should not have returned an error")
+				require.NotNil(t, got, "got should not be nil when no error occurs")
+				require.True(t, bytes.Equal(got, data), "bytes read are not equal to bytes written")
+			}
+		})
+	}
+}
+
+func TestMessagePublication_IsWTT(t *testing.T) {
+	// Using real mainnet and testnet token bridge emitter addresses as hex strings
+	const (
+		ethTokenBridgeHex = "0000000000000000000000003ee18b2214aff97000d974cf647e7c347e8fa585"
+
+		solanaTokenBridgeHex     = "ec7372995d5cc8732397fb0ad35c0121e0eaa90d26f828a534cab54391b3a4f5" // #nosec G101 -- addresses, not secrets
+		wrongEmitterHex          = "0000000000000000000000000000000000000000000000000000000000000001"
+		ethTestnetTokenBridgeHex = "000000000000000000000000f890982f9310df57d00f659cf4fd87e65aded8d7"
+	)
+
+	tests := []struct {
+		name           string
+		emitterChain   vaa.ChainID
+		emitterAddrHex string
+		payload        []byte
+		env            Environment
+		want           bool
+	}{
+		{
+			name:           "happy path - valid mainnet WTT from Ethereum",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: ethTokenBridgeHex,
+			payload:        []byte{0x01}, // Transfer payload type
+			env:            MainNet,
+			want:           true,
+		},
+		{
+			name:           "happy path - valid mainnet WTT from Solana with payload type 3",
+			emitterChain:   vaa.ChainIDSolana,
+			emitterAddrHex: solanaTokenBridgeHex,
+			payload:        []byte{0x03}, // Transfer with payload type
+			env:            MainNet,
+			want:           true,
+		},
+		{
+			name:           "failure - wrong payload type",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: ethTokenBridgeHex,
+			payload:        []byte{0x02}, // Not a transfer payload
+			env:            MainNet,
+			want:           false,
+		},
+		{
+			name:           "failure - chain without token bridge in environment",
+			emitterChain:   vaa.ChainIDCosmoshub,
+			emitterAddrHex: ethTokenBridgeHex,
+			payload:        []byte{0x01},
+			env:            MainNet,
+			want:           false,
+		},
+		{
+			name:           "failure - emitter address doesn't match token bridge",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: solanaTokenBridgeHex,
+			payload:        []byte{0x01},
+			env:            MainNet,
+			want:           false,
+		},
+		{
+			name:           "failure - test environment (GoTest)",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: ethTokenBridgeHex,
+			payload:        []byte{0x01},
+			env:            GoTest,
+			want:           false,
+		},
+		{
+			name:           "failure - mock environment (AccountantMock)",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: ethTokenBridgeHex,
+			payload:        []byte{0x01},
+			env:            AccountantMock,
+			want:           false,
+		},
+		{
+			name:           "failure - empty payload",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: ethTokenBridgeHex,
+			payload:        []byte{},
+			env:            MainNet,
+			want:           false,
+		},
+		{
+			name:           "valid testnet WTT from Ethereum",
+			emitterChain:   vaa.ChainIDEthereum,
+			emitterAddrHex: ethTestnetTokenBridgeHex,
+			payload:        []byte{0x01},
+			env:            TestNet,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emitterAddr, err := vaa.StringToAddress(tt.emitterAddrHex)
+			require.NoError(t, err)
+
+			msg := &MessagePublication{
+				EmitterChain:   tt.emitterChain,
+				EmitterAddress: emitterAddr,
+				Payload:        tt.payload,
+			}
+
+			got := msg.IsWTT(tt.env)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

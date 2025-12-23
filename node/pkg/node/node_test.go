@@ -194,6 +194,7 @@ func mockGuardianRunnable(t testing.TB, gs []*mockGuardian, mockGuardianIndex ui
 			GuardianOptionGovernor(true, false, ""),
 			GuardianOptionGatewayRelayer("", nil),                // disable gateway relayer
 			GuardianOptionQueryHandler(false, false, "", "", ""), // disable queries
+			GuardianOptionNotary(true),
 			GuardianOptionPublicRpcSocket(cfg.publicSocket, publicRpcLogDetail),
 			GuardianOptionPublicrpcTcpService(cfg.publicRpc, publicRpcLogDetail),
 			GuardianOptionPublicWeb(cfg.publicWeb, cfg.publicSocket, "", false, ""),
@@ -758,8 +759,9 @@ func runConsensusTests(t *testing.T, testCases []testCase, numGuardians int) {
 					queryCtx, queryCancel := context.WithTimeout(ctx, time.Second)
 					_, err := adminCs[adminRpcGuardianIndex].SendObservationRequest(queryCtx, &nodev1.SendObservationRequestRequest{
 						ObservationRequest: &gossipv1.ObservationRequest{
-							ChainId: uint32(testCase.msg.EmitterChain),
-							TxHash:  testCase.msg.TxID,
+							ChainId:   uint32(testCase.msg.EmitterChain),
+							TxHash:    testCase.msg.TxID,
+							Timestamp: time.Now().UnixNano(),
 						},
 					})
 					queryCancel()

@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
@@ -24,12 +25,93 @@ const (
 	// CacheDeleteCount specifies the number of entries to delete from a cache once it reaches CacheMaxSize.
 	// Must be less than CacheMaxSize.
 	CacheDeleteCount = 10
+
+	// Invariant violation messages. There technically only exists two violations.
+	INVARIANT_NO_DEPOSIT           = "bridge transfer requested for tokens that were never deposited"
+	INVARIANT_INSUFFICIENT_DEPOSIT = "bridge transfer requested for more tokens than were deposited"
 )
+
+// msgID is a unique identifier the corresponds to a VAA's "message ID".
+// i.e.emitter_chain/emitter_address/sequence tuple. In this package, it is used
+// to identify a single LogMessagePublished event, which in turn maps onto a unique
+// MessagePublication elsewhere in the Guardian code.
+type msgID struct {
+	// Sequence of the VAA
+	Sequence uint64
+	// EmitterChain the VAA was emitted on
+	EmitterChain vaa.ChainID
+	// EmitterAddress of the contract that emitted the Message
+	EmitterAddress vaa.Address
+}
+
+// MessageID returns a human-readable emitter_chain/emitter_address/sequence tuple.
+func (m *msgID) String() string {
+	return fmt.Sprintf("%d/%s/%d", m.EmitterChain, m.EmitterAddress, m.Sequence)
+}
+
+func (m *msgID) Empty() bool {
+	return m.EmitterChain == 0 && m.EmitterAddress == ZERO_ADDRESS_VAA && m.Sequence == 0
+}
+
+// NewMsgID creates a new msgID from a string in the format "chainID/emitterAddress/sequence".
+func NewMsgID(in string) (msgID, error) {
+	if len(in) == 0 {
+		return msgID{}, errors.New("msgIDStr is empty")
+	}
+	parts := strings.Split(in, "/")
+	if len(parts) != 3 {
+		return msgID{}, errors.New("invalid msgID: must be in the format chainID/emitterAddress/sequence")
+	}
+
+	chainID, err := vaa.StringToKnownChainID(parts[0])
+	if err != nil {
+		return msgID{}, err
+	}
+
+	supported := IsSupported(chainID)
+	if !supported {
+		return msgID{}, fmt.Errorf("chainID %d (%s) is does not have a Transfer Verifier implementation or is not supported", chainID, chainID.String())
+	}
+
+	emitterAddress, err := vaa.StringToAddress(parts[1])
+	if err != nil {
+		return msgID{}, err
+	}
+
+	sequence, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		return msgID{}, err
+	}
+
+	if chainID == vaa.ChainIDUnset || emitterAddress == ZERO_ADDRESS_VAA {
+		return msgID{}, errors.New("invalid msgID: chainID or emitterAddress is unset or zero")
+	}
+
+	return msgID{
+		EmitterChain:   chainID,
+		EmitterAddress: emitterAddress,
+		Sequence:       sequence,
+	}, nil
+
+}
+
+// Custom error type used to signal that a core invariant of the token bridge has been violated.
+type InvariantError struct {
+	Msg string
+}
+
+func (i InvariantError) Error() string {
+	return fmt.Sprintf("invariant violated: %s", i.Msg)
+}
 
 // Extracts the value at the given path from the JSON object, and casts it to
 // type T. If the path does not exist in the object, an error is returned.
 func extractFromJsonPath[T any](data json.RawMessage, path string) (T, error) {
 	var defaultT T
+
+	if data == nil {
+		return defaultT, fmt.Errorf("supplied JSON data is nil")
+	}
 
 	var obj map[string]interface{}
 	err := json.Unmarshal(data, &obj)
@@ -59,7 +141,7 @@ func extractFromJsonPath[T any](data json.RawMessage, path string) (T, error) {
 		if v, ok := value.(T); ok {
 			return v, nil
 		} else {
-			return defaultT, fmt.Errorf("can't convert to type T")
+			return defaultT, fmt.Errorf("can't convert to type %T", *new(T))
 		}
 	} else {
 		return defaultT, fmt.Errorf("key %s not found", keys[len(keys)-1])
@@ -115,12 +197,14 @@ func SupportedChains() []vaa.ChainID {
 	return []vaa.ChainID{
 		// Mainnets
 		vaa.ChainIDEthereum,
+		vaa.ChainIDSui,
 		// Testnets
 		vaa.ChainIDSepolia,
 		vaa.ChainIDHolesky,
 	}
 }
 
+// IsSupported returns true if the chain ID is supported by the Transfer Verifier.
 func IsSupported(cid vaa.ChainID) bool {
 	return slices.Contains(SupportedChains(), cid)
 }
@@ -223,4 +307,99 @@ func upsert(
 		d[key] = new(big.Int).Add(d[key], amount)
 	}
 	return nil
+}
+
+type MsgIdToRequestOutOfBridge map[string]*RequestOutOfBridge
+
+// Represents a request to move assets out of the Sui token bridge
+type RequestOutOfBridge struct {
+	AssetKey string
+	Amount   *big.Int
+
+	// Validation parameters
+	DepositMade    bool // True if `assetKey` was deposited into the bridge
+	DepositSolvent bool // True if `assetKey` is considered solvent
+}
+
+type AssetKeyToTransferIntoBridge map[string]*TransferIntoBridge
+
+// Represents a transfer of assets into the Sui token bridge
+type TransferIntoBridge struct {
+	Amount  *big.Int
+	Solvent bool
+}
+
+// validateSolvency checks whether or not the transfers into the brigde are sufficient to cover the
+// requests to transfer assets out of the bridge.
+//   - if an asset is considered insolvent, all requests out of the bridge for that asset are marked
+//     as invalid.
+//   - if an asset is considered solvent, all requests out of the bridge for that asset are marked
+//     as valid.
+//
+// The typical case where this would be important is when multiple bridge transfers are requested in
+// the same transaction. If the transfers are of different assets, it's important that one asset's
+// insolvency does not affect the validity of other bridge transfers.
+func validateSolvency(
+	requests MsgIdToRequestOutOfBridge,
+	transfers AssetKeyToTransferIntoBridge,
+) (MsgIdToRequestOutOfBridge, error) {
+	resolved := make(MsgIdToRequestOutOfBridge)
+
+	insolventAssetKeys := []string{}
+
+	// Check that all requests and transfers have non-nil amounts.
+	// This function assumes that amounts are non-nil, so an error is returned if
+	// any amount is nil. An empty resolution map is also returned.
+	for msgIdStr, request := range requests {
+		if request.Amount == nil {
+			return resolved, fmt.Errorf("nil amount in request out of bridge for msgID %s", msgIdStr)
+		}
+	}
+
+	for assetKey, transfer := range transfers {
+		if transfer.Amount == nil {
+			return resolved, fmt.Errorf("nil amount in transfer into bridge for assetKey %s", assetKey)
+		}
+	}
+
+	// First pass: check if assets were deposited for the requests out of the bridge,
+	// and subtract the requested amounts from the transfers into the bridge.
+	for _, request := range requests {
+		transfer, exists := transfers[request.AssetKey]
+		if !exists {
+			// No transfer into the bridge for this asset. Set depositMade to false.
+			request.DepositMade = false
+			continue
+		}
+
+		// Mark that a deposit was made for this asset.
+		request.DepositMade = true
+
+		// Subtract the requested amount from the transfer amount
+		transfer.Amount = new(big.Int).Sub(transfer.Amount, request.Amount)
+
+		// The moment the transfer amount goes negative, the asset is insolvent.
+		if transfer.Amount.Sign() < 0 {
+			insolventAssetKeys = append(insolventAssetKeys, request.AssetKey)
+		}
+	}
+
+	// Second pass: check each request's assetKey against the list of insolvent assets.
+	// If the assetKey is not in the list, then mark the request as solvent.
+	for msgIdStr, request := range requests {
+		if !request.DepositMade {
+			// No deposit was made for this asset. Mark as insolvent.
+			request.DepositSolvent = false
+		} else if slices.Contains(insolventAssetKeys, request.AssetKey) {
+			// Asset is insolvent.
+			request.DepositSolvent = false
+		} else {
+			// Asset is solvent.
+			request.DepositSolvent = true
+		}
+
+		resolved[msgIdStr] = request
+	}
+
+	return resolved, nil
 }

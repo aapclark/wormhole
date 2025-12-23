@@ -194,6 +194,7 @@ def generate_bootstrap_peers(num_guardians, port_num):
 
 bootstrapPeers = generate_bootstrap_peers(num_guardians, 8999)
 ccqBootstrapPeers = generate_bootstrap_peers(num_guardians, 8996)
+stakingFactoryAddress = "0xb4ffe5983b0b748124577af4d16953bd096b6897"
 
 def build_node_yaml():
     node_yaml = read_yaml_stream("devnet/node.yaml")
@@ -224,7 +225,7 @@ def build_node_yaml():
                 container["command"] += [
                     "--ccqStakingEnabled",
                     "--ccqFactoryAddress",
-                    "0xb4ffe5983b0b748124577af4d16953bd096b6897",
+                    stakingFactoryAddress,
                 ]
 
             if aptos:
@@ -676,7 +677,7 @@ if ci_tests:
                         set_env_in_jobs(read_yaml_stream("devnet/tests.yaml"), "NUM_GUARDIANS", str(num_guardians)),
                         "BOOTSTRAP_PEERS", str(ccqBootstrapPeers)),
                     "MAX_WORKERS", max_workers),
-                "STAKING_FACTORY_ADDRESS", "0xff5181e2210ab92a5c9db93729bc47332555b9e9"))
+                "STAKING_FACTORY_ADDRESS", stakingFactoryAddress))
     )
 
     # separate resources to parallelize docker builds
@@ -999,10 +1000,10 @@ if kubo:
         context = ".",
         dockerfile_contents = """
 FROM ipfs/kubo:latest
-# No additional configuration needed - ephemeral setup is done via command in k8s yaml
         """,
     )
 
+    k8s_yaml_with_ns("devnet/ccq-rate-limits-config.yaml")
     k8s_yaml_with_ns("devnet/kubo.yaml")
 
     k8s_resource(

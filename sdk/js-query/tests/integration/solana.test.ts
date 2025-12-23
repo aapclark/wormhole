@@ -18,7 +18,7 @@ import {
 } from "../../src";
 import {
   ensureStakerHasStake,
-  FACTORY_ADDRESS,
+  STAKING_FACTORY_ADDRESS,
   getPoolAddress,
   getSolanaSlot,
   mintAndTransferTokens,
@@ -69,10 +69,10 @@ describe("solana", () => {
     await mintAndTransferTokens(stakerAddress, STAKE_AMOUNT);
 
     // Get pool address from factory
-    poolAddress = await getPoolAddress(FACTORY_ADDRESS, SOLANA_QUERY_TYPE);
+    poolAddress = await getPoolAddress(STAKING_FACTORY_ADDRESS, SOLANA_QUERY_TYPE);
 
     console.log("\nSolana Query Test Configuration:");
-    console.log("  Factory:", FACTORY_ADDRESS);
+    console.log("  Factory:", STAKING_FACTORY_ADDRESS);
     console.log("  Pool:", poolAddress);
 
     expect(poolAddress).toBeTruthy();

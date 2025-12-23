@@ -116,7 +116,7 @@ spec:
             - "bash /app/testing/querysdk.sh && touch /app/testing/success"
           env:
             - name: STAKING_FACTORY_ADDRESS
-              value: "0xff5181e2210ab92a5c9db93729bc47332555b9e9"
+              value: "0xb4ffe5983b0b748124577af4d16953bd096b6897"
             - name: IPFS_GATEWAY
               value: "http://kubo:8080/ipfs/"
             - name: ETH_RPC_URL

@@ -3,7 +3,7 @@ import { parseEther, formatEther, type Address } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import {
   EVM_QUERY_TYPE,
-  FACTORY_ADDRESS,
+  STAKING_FACTORY_ADDRESS,
   createClient,
   getPoolAddress,
   POOL_ABI,
@@ -19,7 +19,7 @@ import {
 jest.setTimeout(180000);
 setupAxiosInterceptor();
 
-// Rate limit tiers from ccq-rate-limits.json:
+// Rate limit tiers from `devnet/kubo.yaml`
 // - 50 tokens = 1 QPM
 // - 500 tokens = 1 QPS
 const LOW_STAKE_AMOUNT = "50"; // Low stake for rate limit testing
@@ -105,13 +105,13 @@ const stakersToCleanup = new Set<`0x${string}`>();
 
 describe("Staking Integration Tests", () => {
   beforeAll(async () => {
-    poolAddress = await getPoolAddress(FACTORY_ADDRESS, EVM_QUERY_TYPE);
+    poolAddress = await getPoolAddress(STAKING_FACTORY_ADDRESS, EVM_QUERY_TYPE);
 
     expect(poolAddress).toBeTruthy();
     expect(poolAddress).not.toBe("0x0000000000000000000000000000000000000000");
 
     console.log("\nStaking Integration Test Configuration:");
-    console.log("  Factory:", FACTORY_ADDRESS);
+    console.log("  Factory:", STAKING_FACTORY_ADDRESS);
     console.log("  Pool:", poolAddress);
     console.log("  Token:", W_TOKEN_ADDRESS);
 

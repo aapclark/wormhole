@@ -28,7 +28,7 @@ import {
   createClient,
   ERC20_ABI,
   EVM_QUERY_TYPE,
-  FACTORY_ADDRESS,
+  STAKING_FACTORY_ADDRESS,
   getPoolAddress,
   mintAndTransferTokens,
   POOL_STAKE_ABI,
@@ -183,10 +183,10 @@ beforeAll(async () => {
   );
 
   // Get pool address from factory
-  poolAddress = await getPoolAddress(FACTORY_ADDRESS, EVM_QUERY_TYPE);
+  poolAddress = await getPoolAddress(STAKING_FACTORY_ADDRESS, EVM_QUERY_TYPE);
 
   console.log("\nEthCall2 Test Configuration:");
-  console.log("  Factory:", FACTORY_ADDRESS);
+  console.log("  Factory:", STAKING_FACTORY_ADDRESS);
   console.log("  Pool:", poolAddress);
   console.log("  Token:", W_TOKEN_ADDRESS);
   console.log("  Stake per wallet:", STAKE_AMOUNT, "tokens");

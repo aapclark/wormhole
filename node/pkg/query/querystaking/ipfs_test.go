@@ -16,11 +16,11 @@ import (
 // TestBytes32ToCIDString tests CID conversion from bytes32 to string
 func TestBytes32ToCIDString(t *testing.T) {
 	tests := []struct {
-		name        string
-		hashHex     string
-		wantCID     string // Expected full CID (if known)
-		wantPrefix  string // CIDv1 base32 always starts with "bafk"
-		wantError   bool
+		name       string
+		hashHex    string
+		wantCID    string // Expected full CID (if known)
+		wantPrefix string // CIDv1 base32 always starts with "bafk"
+		wantError  bool
 	}{
 		{
 			name:       "valid sha256 hash",
@@ -41,7 +41,7 @@ func TestBytes32ToCIDString(t *testing.T) {
 			wantError:  false,
 		},
 		{
-			name:       "ccq-rate-limits.json hash (devnet file)",
+			name:       "rate limits hash (devnet file)",
 			hashHex:    "02efea897e8c6894c980442c23bf07d6a4b0266cc085e479f7d37ad8cb017b6c",
 			wantCID:    "bafkreiac57vis7umnckmtacefqr36b6wusycm3gaqxsht56tplmmwal3nq",
 			wantPrefix: "bafk",
@@ -103,7 +103,7 @@ func TestCIDStringToBytes32(t *testing.T) {
 		wantHash string // Expected SHA256 hash in hex
 	}{
 		{
-			name:     "correct CID for ccq-rate-limits.json",
+			name:     "correct CID for rate limits in CI",
 			cidStr:   "bafkreihtyy6gnalxiy5lojypcebbymzlq642kz6a7lna2rq7ee6ocl3jue",
 			wantHash: "", // We'll discover this
 		},

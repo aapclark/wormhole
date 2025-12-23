@@ -9,7 +9,7 @@ import {QueryTypeStakerFactory} from "src/QueryTypeStakerFactory.sol";
 import {QueryTypeStakingPool} from "src/QueryTypeStakingPool.sol";
 
 contract CreateStakingPool is Script {
-  // Default configuration constants matching ccq-rate-limits.json thresholds
+  // Default configuration constants matching devnet/kubo.yaml
   // EVM rates: 50000 = 1 QPS, 5000 = 1 QPM
   uint256 constant DEFAULT_STAKING_TOKEN_CAPACITY = 1_000_000 * 10**18; // 1 million tokens
   uint256 constant DEFAULT_MINIMUM_STAKE = 5_000 * 10**18; // 5,000 tokens (matches 1 QPM threshold)
@@ -69,7 +69,6 @@ contract CreateStakingPool is Script {
     console.log("  -> That's", accessPeriod / 60, "minutes");
 
     // Update conversion table with rate limits CID
-    // The hash is computed at deploy time from the actual ccq-rate-limits.json file
     // This ensures the on-chain hash always matches what kubo/IPFS generates
     bytes32 rateLimitsCid = vm.envBytes32("RATE_LIMITS_CID");
 

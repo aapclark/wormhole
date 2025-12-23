@@ -16,9 +16,6 @@ COPY --chown=node:node wormhole/staking-contracts/deploy_all_pools.sh queries-st
 # COPY --chown=node:node wormhole/staking-contracts/distribute_test_tokens.sh queries-staking/
 COPY --chown=node:node wormhole/staking-contracts/script/CreateStakingPool.s.sol queries-staking/script/
 
-# Copy rate limits configuration
-COPY --chown=node:node wormhole/devnet/ccq-rate-limits.json queries-staking/ccq-rate-limits.json
-
 WORKDIR /home/node/app/queries-staking
 
 # Make deploy scripts executable

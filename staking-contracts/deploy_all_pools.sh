@@ -17,7 +17,6 @@ set -e  # Exit on error
 RPC_URL="${ETH_RPC_URL:-http://localhost:8545}"
 PRIVATE_KEY="0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
 W_TOKEN_ADDRESS="0x2D8BE6BF0baA74e0A907016679CaE9190e80dD0A"
-# RATE_LIMITS_FILE="${RATE_LIMITS_FILE:-./ccq-rate-limits.json}"
 
 # Event topic for CreateQueryTypeStakingPool(bytes32 indexed queryType, address indexed poolAddress)
 CREATE_POOL_EVENT_TOPIC="0x34d4b91c04bf254b71c435c46e26f1c0b6ec05b426b3bbebb5a80d3e71c030db"

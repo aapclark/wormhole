@@ -12,7 +12,7 @@ import {
 } from "../../src";
 import {
   EVM_QUERY_TYPE,
-  FACTORY_ADDRESS,
+  STAKING_FACTORY_ADDRESS,
   getCurrentTimestampSeconds,
   createClient,
   getPoolAddress,
@@ -84,7 +84,7 @@ let poolAddress: Address;
 
 describe("Delegation Integration Tests", () => {
   beforeAll(async () => {
-    poolAddress = await getPoolAddress(FACTORY_ADDRESS, EVM_QUERY_TYPE);
+    poolAddress = await getPoolAddress(STAKING_FACTORY_ADDRESS, EVM_QUERY_TYPE);
 
     expect(poolAddress).toBeTruthy();
     expect(poolAddress).not.toBe("0x0000000000000000000000000000000000000000");

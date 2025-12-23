@@ -61,7 +61,7 @@ spec:
             - --shutdownDelay1
             - "0"
             - --ccqFactoryAddress
-            - "0xff5181e2210ab92a5c9db93729bc47332555b9e9"
+            - "0xb4ffe5983b0b748124577af4d16953bd096b6897"
             - --ipfsGateway
             - "http://kubo:8080/ipfs/"
             - --policyCacheDuration=60

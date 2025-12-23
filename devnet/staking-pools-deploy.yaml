@@ -13,9 +13,21 @@ spec:
         app: staking-pools-deploy
     spec:
       restartPolicy: Never
+      volumes:
+        - name: rate-limits
+          configMap:
+            name: ccq-rate-limits
+            items:
+              - key: ccq-rate-limits.json
+                path: ccq-rate-limits.json
       containers:
         - name: staking-pools-deploy
           image: staking-pools-deploy
+          volumeMounts:
+            - name: rate-limits
+              mountPath: /home/node/app/queries-staking/ccq-rate-limits.json
+              subPath: ccq-rate-limits.json
+              readOnly: true
           command:
             - /bin/bash
             - -c

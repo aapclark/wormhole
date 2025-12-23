@@ -55,9 +55,9 @@ export const MINTER_ADDRESS =
 export const WETH_ADDRESS = "0xDDb64fE46a91D46ee29420539FC25FD07c5FEa3E";
 export const W_TOKEN_ADDRESS =
   "0x2D8BE6BF0baA74e0A907016679CaE9190e80dD0A" as Address;
-export const FACTORY_ADDRESS =
+export const STAKING_FACTORY_ADDRESS =
   (process.env.STAKING_FACTORY_ADDRESS as Address) ||
-  ("0xff5181e2210ab92a5c9db93729bc47332555b9e9" as Address);
+  ("0xb4ffe5983b0b748124577af4d16953bd096b6897" as Address);
 
 // Query types
 export const EVM_QUERY_TYPE =

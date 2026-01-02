@@ -60,9 +60,10 @@ func (s *httpServer) handleQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// Set CORS headers for the preflight request
+	// TODO: Confirm if X-Api-Key can be removed once legacy permissions mode is deprecated
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Methods", "PUT, POST")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key, X-Signature-Format")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -189,8 +190,17 @@ func (s *httpServer) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Recover signer address from signature
+		// Check X-Signature-Format header to determine recovery method
+		// Values: "eip191" for browser wallets (personal_sign), default/empty for raw ECDSA
 		digest := query.QueryRequestDigest(s.env, signedQueryRequest.QueryRequest)
-		signerAddr, err := query.RecoverQueryRequestSigner(digest.Bytes(), signedQueryRequest.Signature)
+		var signerAddr eth_common.Address
+		if r.Header.Get("X-Signature-Format") == "eip191" {
+			// Browser wallets use personal_sign which adds EIP-191 prefix
+			signerAddr, err = query.RecoverPrefixedSigner(digest.Bytes(), signedQueryRequest.Signature)
+		} else {
+			// CLI/SDK use raw ECDSA signatures (default)
+			signerAddr, err = query.RecoverQueryRequestSigner(digest.Bytes(), signedQueryRequest.Signature)
+		}
 		if err != nil {
 			s.logger.Error("failed to recover signer from signature", zap.Error(err))
 			http.Error(w, "invalid signature", http.StatusBadRequest)

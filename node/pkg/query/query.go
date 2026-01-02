@@ -83,6 +83,18 @@ func RecoverQueryRequestSigner(digest, signature []byte) (ethCommon.Address, err
 	return address, nil
 }
 
+// RecoverPrefixedSigner recovers the signer from an EIP-191 personal_sign signature.
+// Browser wallets add "\x19Ethereum Signed Message:\n{len}" before signing.
+func RecoverPrefixedSigner(digest, signature []byte) (ethCommon.Address, error) {
+	// Recreate what the wallet signed: keccak256("\x19Ethereum Signed Message:\n" + len + message)
+	prefixed := ethCrypto.Keccak256(
+		[]byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(digest))),
+		digest,
+	)
+	// Now recover using the same hash the wallet used
+	return RecoverQueryRequestSigner(prefixed, signature)
+}
+
 type (
 	// Watcher is the interface that any watcher that supports cross chain queries must implement.
 	Watcher interface {

@@ -184,7 +184,7 @@ func (sc *StakingClient) GetStakeInfo(ctx context.Context, poolAddress, stakerAd
 			zap.String("staker", stakerAddress.Hex()),
 			zap.Error(err))
 
-		return nil, fmt.Errorf("failed to call stakes on pool %s: %w", poolName, err)
+		return nil, fmt.Errorf("failed to call getStakeInfo on pool %s: %w", poolName, err)
 	}
 
 	// Measure parsing latency

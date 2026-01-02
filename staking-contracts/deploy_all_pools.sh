@@ -17,13 +17,15 @@ set -e  # Exit on error
 RPC_URL="${ETH_RPC_URL:-http://localhost:8545}"
 PRIVATE_KEY="0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
 W_TOKEN_ADDRESS="0x2D8BE6BF0baA74e0A907016679CaE9190e80dD0A"
+RATE_LIMITS_FILE="${RATE_LIMITS_FILE:-./ccq-rate-limits.json}"
 
 # Event topic for CreateQueryTypeStakingPool(bytes32 indexed queryType, address indexed poolAddress)
 CREATE_POOL_EVENT_TOPIC="0x34d4b91c04bf254b71c435c46e26f1c0b6ec05b426b3bbebb5a80d3e71c030db"
 
 # Common pool parameters
+# Note: Decay rate is now encoded in the lowest byte of queryType (bits 0-7)
+# Query type flags are in bits 8+
 INITIAL_ENTRY=${INITIAL_ENTRY:-"0x0000000000000000000000000000000000000000000000000000000000000001"}
-DECAY_RATE=${DECAY_RATE:-"10"}
 
 export PRIVATE_KEY W_TOKEN_ADDRESS
 
@@ -35,9 +37,13 @@ export PRIVATE_KEY W_TOKEN_ADDRESS
 extract_pool_address() {
     local broadcast_file="$1"
     if [ -f "$broadcast_file" ]; then
-        jq -r --arg topic "$CREATE_POOL_EVENT_TOPIC" \
+        local result
+        result=$(jq -r --arg topic "$CREATE_POOL_EVENT_TOPIC" \
             '.receipts[0].logs[] | select(.topics[0] == $topic) | .topics[2]' \
-            "$broadcast_file" | sed 's/0x000000000000000000000000/0x/'
+            "$broadcast_file" 2>/dev/null)
+        if [ -n "$result" ] && [ "$result" != "null" ]; then
+            echo "$result" | sed 's/0x000000000000000000000000/0x/'
+        fi
     fi
 }
 
@@ -53,7 +59,7 @@ create_pool() {
     echo "Creating $name staking pool..."
 
     export QUERY_TYPE="$query_type"
-    export INITIAL_ENTRY DECAY_RATE
+    export INITIAL_ENTRY
 
     if [ -n "$min_stake" ]; then
         export MINIMUM_STAKE="$min_stake"
@@ -94,7 +100,8 @@ if [ -f "$RATE_LIMITS_FILE" ]; then
     echo "Computed RATE_LIMITS_CID from $RATE_LIMITS_FILE"
 else
     echo "Warning: Rate limits file not found at $RATE_LIMITS_FILE"
-    exit 1
+    echo "Using empty hash - rate limits will not work!"
+    RATE_LIMITS_CID="0x0000000000000000000000000000000000000000000000000000000000000000"
 fi
 export RATE_LIMITS_CID
 
@@ -122,6 +129,7 @@ export FACTORY_ADDRESS
 
 # Step 2: Create EVM pool
 # Query Types 1, 2, 3 (binary 0b111 = 0x07)
+# TODO: Investigate factory queryTypePools mapping - may need shifted format (0x0700) for decay rate encoding
 echo ""
 echo "Step 2: Creating EVM staking pool..."
 EVM_POOL_ADDRESS=$(create_pool "EVM" \
@@ -135,7 +143,7 @@ echo ""
 echo "Step 3: Creating Solana staking pool..."
 SOLANA_POOL_ADDRESS=$(create_pool "Solana" \
     "0x0000000000000000000000000000000000000000000000000000000000000018" \
-    "1250000000000000000" \
+    "125000000000000000000" \
     "sol_account, sol_pda")
 
 # Summary
@@ -150,4 +158,4 @@ echo "  Min stake: 100 tokens"
 echo ""
 echo "Solana Pool: ${SOLANA_POOL_ADDRESS:-'(check logs above)'}"
 echo "  Query types: sol_account (4), sol_pda (5)"
-echo "  Min stake: 125 tokens"
+echo "  Min stake: 12,500 tokens"

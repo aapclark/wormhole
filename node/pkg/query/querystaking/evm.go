@@ -50,9 +50,9 @@ func ParseStakeInfo(data []byte) (*StakeInfo, error) {
 	return stakeInfo, nil
 }
 
-// PackStakesCall creates call data for the stakes(address) function.
+// PackStakesCall creates call data for the getStakeInfo(address) function.
 func PackStakesCall(staker common.Address) []byte {
-	selector := crypto.Keccak256([]byte("stakes(address)"))[:4]
+	selector := crypto.Keccak256([]byte("getStakeInfo(address)"))[:4]
 	paddedAddress := common.LeftPadBytes(staker.Bytes(), 32)
 
 	result := make([]byte, 4+32)

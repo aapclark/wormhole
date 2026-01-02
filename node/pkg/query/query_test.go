@@ -1197,3 +1197,55 @@ func TestUnauthorizedDelegation(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, selfStakingPolicy.Limits.Types, "Self-staking should always be authorized")
 }
+
+// ============================================================================
+// Signature Format Tests (EIP-191 prefixed signatures)
+// ============================================================================
+
+// TestRecoverPrefixedSigner tests that EIP-191 prefixed signatures are correctly recovered
+func TestRecoverPrefixedSigner(t *testing.T) {
+	sk, err := ethCrypto.GenerateKey()
+	require.NoError(t, err)
+	expectedAddr := ethCrypto.PubkeyToAddress(sk.PublicKey)
+
+	// Create a test message and compute digest
+	message := []byte("test query request bytes")
+	digest := QueryRequestDigest(common.UnsafeDevNet, message)
+
+	t.Run("prefixed signature recovery succeeds", func(t *testing.T) {
+		// Sign with EIP-191 prefix (what personal_sign does)
+		prefixedHash := ethCrypto.Keccak256(
+			[]byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(digest.Bytes()))),
+			digest.Bytes(),
+		)
+		sig, err := ethCrypto.Sign(prefixedHash, sk)
+		require.NoError(t, err)
+
+		// Recover using RecoverPrefixedSigner
+		recovered, err := RecoverPrefixedSigner(digest.Bytes(), sig)
+		require.NoError(t, err)
+		assert.Equal(t, expectedAddr, recovered)
+	})
+
+	t.Run("raw signature recovery still works", func(t *testing.T) {
+		// Sign with raw ECDSA (no prefix)
+		sig, err := ethCrypto.Sign(digest.Bytes(), sk)
+		require.NoError(t, err)
+
+		// Recover using RecoverQueryRequestSigner
+		recovered, err := RecoverQueryRequestSigner(digest.Bytes(), sig)
+		require.NoError(t, err)
+		assert.Equal(t, expectedAddr, recovered)
+	})
+
+	t.Run("wrong recovery method returns different address", func(t *testing.T) {
+		// Sign with raw ECDSA
+		sig, err := ethCrypto.Sign(digest.Bytes(), sk)
+		require.NoError(t, err)
+
+		// Try to recover as prefixed - should get wrong address
+		recovered, err := RecoverPrefixedSigner(digest.Bytes(), sig)
+		require.NoError(t, err)
+		assert.NotEqual(t, expectedAddr, recovered, "Wrong recovery method should produce different address")
+	})
+}
